@@ -1,0 +1,6 @@
+techrepairhub/target/ 
+techrepairhub-frontend/node_modules/ 
+techrepairhub-frontend/dist/ 
+*.log 
+.env 
+.env.local 
