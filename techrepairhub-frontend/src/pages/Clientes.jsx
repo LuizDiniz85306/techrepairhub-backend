@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../api/axiosConfig";
+import { normalizeError } from "../utils/formatters";
 
 export default function Clientes() {
   const [clientes, setClientes] = useState([]);
@@ -24,7 +25,6 @@ export default function Clientes() {
   async function carregarClientes() {
     try {
       const response = await api.get("/clientes");
-      console.log("Clientes vindos do back:", response.data);
       setClientes(response.data);
     } catch (error) {
       console.log("Erro ao carregar clientes:", error);
@@ -34,11 +34,57 @@ export default function Clientes() {
 
   function handleChange(event) {
     const { name, value } = event.target;
-
-    setForm({
-      ...form,
+    setForm((current) => ({
+      ...current,
       [name]: value,
-    });
+    }));
+  }
+
+  function pegarUsuarioId(cliente) {
+    return cliente.usuarioId || cliente.usuario?.id || "-";
+  }
+
+  async function confirmarClienteCriado(usuarioId, fallback) {
+    try {
+      const response = await api.get(`/clientes/usuario/${usuarioId}`);
+      return response.data;
+    } catch (error) {
+      console.log("Não foi possível confirmar cliente por usuário:", error);
+      return fallback;
+    }
+  }
+
+  async function criarOuEncontrarUsuarioCliente() {
+    try {
+      const usuarioResponse = await api.post("/usuarios", {
+        nome: form.nome,
+        email: form.email,
+        senha: form.senha,
+        perfil: "CLIENTE",
+      });
+
+      return usuarioResponse.data;
+    } catch (error) {
+      const mensagem = normalizeError(error, "");
+      if (!mensagem.toLowerCase().includes("e-mail")) {
+        throw error;
+      }
+
+      const usuariosResponse = await api.get("/usuarios");
+      const usuarioExistente = usuariosResponse.data.find(
+        (usuario) => String(usuario.email).toLowerCase() === form.email.toLowerCase()
+      );
+
+      if (!usuarioExistente) {
+        throw error;
+      }
+
+      if (usuarioExistente.perfil !== "CLIENTE") {
+        throw new Error("Já existe usuário com este e-mail, mas ele não possui perfil CLIENTE.");
+      }
+
+      return usuarioExistente;
+    }
   }
 
   async function cadastrarCliente(event) {
@@ -49,42 +95,40 @@ export default function Clientes() {
     setCarregando(true);
 
     try {
-      const usuarioParaEnviar = {
-        nome: form.nome,
-        email: form.email,
-        senha: form.senha,
-        perfil: "CLIENTE",
-      };
-
-      console.log("Criando usuário:", usuarioParaEnviar);
-
-      const usuarioResponse = await api.post("/usuarios", usuarioParaEnviar);
-
-      console.log("Usuário criado:", usuarioResponse.data);
+      const usuario = await criarOuEncontrarUsuarioCliente();
 
       const usuarioId =
-        usuarioResponse.data.id ||
-        usuarioResponse.data.usuarioId ||
-        usuarioResponse.data.codigo;
+        usuario.id ||
+        usuario.usuarioId ||
+        usuario.codigo;
 
       if (!usuarioId) {
         throw new Error("O back-end não retornou o ID do usuário criado.");
       }
 
-      const clienteParaEnviar = {
-        usuarioId: usuarioId,
+      const clienteResponse = await api.post("/clientes", {
+        usuarioId,
         cpf: form.cpf,
         telefone: form.telefone,
         whatsapp: form.whatsapp,
         endereco: form.endereco,
-      };
+      });
 
-      console.log("Criando cliente:", clienteParaEnviar);
+      const clienteCriado = await confirmarClienteCriado(usuarioId, clienteResponse.data);
+      if (clienteCriado?.id) {
+        localStorage.setItem(`clienteId:${usuarioId}`, String(clienteCriado.id));
+      }
 
-      await api.post("/clientes", clienteParaEnviar);
+      setClientes((clientesAtuais) => {
+        const semDuplicado = clientesAtuais.filter(
+          (cliente) => String(pegarUsuarioId(cliente)) !== String(usuarioId)
+        );
+        return [...semDuplicado, clienteCriado];
+      });
+
+      await carregarClientes();
 
       setSucesso("Cliente cadastrado com sucesso.");
-
       setForm({
         nome: "",
         email: "",
@@ -94,25 +138,14 @@ export default function Clientes() {
         whatsapp: "",
         endereco: "",
       });
-
-      carregarClientes();
     } catch (error) {
       console.log("Erro completo:", error);
       console.log("Resposta do back:", error.response?.data);
       console.log("Status:", error.response?.status);
-
-      const resposta = error.response?.data;
-
-      const mensagem =
-        resposta?.message ||
-        resposta?.erro ||
-        resposta?.error ||
-        resposta?.mensagem ||
-        JSON.stringify(resposta) ||
-        error.message ||
-        "Erro ao cadastrar cliente. Verifique os dados.";
-
-      setErro(mensagem);
+      setErro(
+        `${normalizeError(error, "Erro ao cadastrar cliente. Verifique os dados.")} ` +
+          "Se o usuário apareceu na tela de usuários, o cadastro do cliente não foi concluído no segundo passo."
+      );
     } finally {
       setCarregando(false);
     }
@@ -148,10 +181,6 @@ export default function Clientes() {
 
   function pegarEndereco(cliente) {
     return cliente.endereco || "-";
-  }
-
-  function pegarUsuarioId(cliente) {
-    return cliente.usuarioId || cliente.usuario?.id || "-";
   }
 
   return (
